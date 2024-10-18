@@ -13,14 +13,14 @@ drive.mount('/content/drive')
 import numpy as np
 import cv2
 import tensorflow as tf
-from tensorflow.keras.applications import InceptionV3
+from tensorflow.keras.applications import InceptionV3, VGG16, InceptionResNetV2
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Flatten, GRU, Reshape
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc, precision_recall_curve
+from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc, precision_recall_curve, f1_score, recall_score, precision_score
 import matplotlib.pyplot as plt
 import itertools
 import os
@@ -105,8 +105,16 @@ def load_data(base_dir):
     return data, labels
 
 # Model oluşturma (Inception v3 + GRU)
-def build_model(hyperparams):
-    base_model = InceptionV3(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+def build_model(hyperparams, base_model_choice='InceptionV3'):
+    if base_model_choice == 'InceptionV3':
+        base_model = InceptionV3(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+    elif base_model_choice == 'VGG16':
+        base_model = VGG16(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+    elif base_model_choice == 'InceptionResNetV2':
+        base_model = InceptionResNetV2(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+    else:
+        raise ValueError("Geçersiz model seçimi")
+
     base_model.trainable = False
 
     model = Sequential([
@@ -141,105 +149,42 @@ def evaluate_model(model, data, labels):
     predictions = model.predict(data)
     predictions = np.argmax(predictions, axis=1)
     report = classification_report(labels, predictions, target_names=['Dense', 'Medium Dense', 'Sparse', 'None'])
+    f1 = f1_score(labels, predictions, average='weighted')
+    recall = recall_score(labels, predictions, average='weighted')
+    precision = precision_score(labels, predictions, average='weighted')
     print(report)
+    print(f'F1 Score: {f1}, Recall: {recall}, Precision: {precision}')
 
-# Karışıklık matrisi çizimi
-def plot_confusion_matrix(y_true, y_pred, classes, title='Confusion Matrix'):
-    cm = confusion_matrix(y_true, y_pred)
-    plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-    plt.title(title)
-    plt.colorbar()
-    tick_marks = np.arange(len(classes))
-    plt.xticks(tick_marks, classes, rotation=45)
-    plt.yticks(tick_marks, classes)
-
-    fmt = 'd'
-    thresh = cm.max() / 2.
-    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
-        plt.text(j, i, format(cm[i, j], fmt), horizontalalignment="center", color="white" if cm[i, j] > thresh else "black")
-
-    plt.ylabel('True label')
-    plt.xlabel('Predicted label')
-    plt.tight_layout()
-    plt.show()
-
-# Doğruluk ve kayıp grafikleri çizimi
-def plot_accuracy_and_loss(history):
-    plt.figure()
-    plt.plot(history.history['accuracy'], label='Training Accuracy')
-    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-    plt.title('Model Accuracy')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.legend()
-    plt.show()
-
-    plt.figure()
-    plt.plot(history.history['loss'], label='Training Loss')
-    plt.plot(history.history['val_loss'], label='Validation Loss')
-    plt.title('Model Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.show()
-
-# PR eğrisi çizimi
-def plot_pr_curve(y_true, y_scores, class_names):
-    for i, class_name in enumerate(class_names):
-        precision, recall, _ = precision_recall_curve(y_true == i, y_scores[:, i])
-        plt.plot(recall, precision, lw=2, label=f'{class_name}')
-
-    plt.xlabel("Recall")
-    plt.ylabel("Precision")
-    plt.title("Precision-Recall Curve")
-    plt.legend(loc="best")
-    plt.show()
-
-# ROC eğrisi çizimi
-def plot_roc_curve(y_true, y_scores, class_names):
-    for i, class_name in enumerate(class_names):
-        fpr, tpr, _ = roc_curve(y_true == i, y_scores[:, i])
-        roc_auc = auc(fpr, tpr)
-        plt.plot(fpr, tpr, lw=2, label=f'{class_name} (AUC = {roc_auc:.2f})')
-
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve")
-    plt.legend(loc="best")
-    plt.show()
+# Grafik çizimleri (karışıklık matrisi, doğruluk/kayıp eğrileri, PR ve ROC eğrileri)
+def plot_metrics(y_true, y_scores, y_pred_classes, history):
+    plot_confusion_matrix(y_true, y_pred_classes, classes=['Dense', 'Medium Dense', 'Sparse', 'None'])
+    plot_accuracy_and_loss(history)
+    plot_pr_curve(y_true, y_scores, class_names=['Dense', 'Medium Dense', 'Sparse', 'None'])
+    plot_roc_curve(y_true, y_scores, class_names=['Dense', 'Medium Dense', 'Sparse', 'None'])
 
 # Ana program
 if __name__ == '__main__':
     base_dir = '/content/drive/MyDrive/Colab Notebooks/dataset/'
     data, labels = load_data(base_dir)
 
-    # Rastgele hiperparametrelerle başlangıç populasyonu oluştur
+    # Hiperparametre optimizasyonu ve eğitim
     init_population = np.random.uniform(low=[32, 1, 1, 0.0001], high=[256, 128, 64, 0.01], size=(10, 4))
-
-    # Hiperparametreleri MPA ve CSTOA ile optimize et
     best_hyperparams_cstoa = cstoa_optimizer(init_population, fitness_function)
+    base_model_choices = ['InceptionV3', 'VGG16', 'InceptionResNetV2']
 
-    # En iyi hiperparametrelerle model oluştur ve eğit
-    model = build_model(best_hyperparams_cstoa)
-
-    # Early stopping callback'ini oluşturun
-    early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
-
-    # Modeli farklı epoch değerleri için eğit
+    # Farklı epoch değerleri ve modellerle eğitim ve değerlendirme
     epoch_values = [500, 1000, 1500]
-    for epochs in epoch_values:
-        print(f'{epochs} epoch ile eğitim yapılıyor...')
-        model, history = train_model(model, data, labels, epochs=epochs, callbacks=[early_stopping])
+    for model_choice in base_model_choices:
+        for epochs in epoch_values:
+            print(f'{model_choice} ile {epochs} epoch için eğitim yapılıyor...')
+            model = build_model(best_hyperparams_cstoa, base_model_choice=model_choice)
+            early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+            model, history = train_model(model, data, labels, epochs=epochs, callbacks=[early_stopping])
+            evaluate_model(model, data, labels)
 
-        # Modeli değerlendir ve metrikleri görüntüle
-        evaluate_model(model, data, labels)
-
-        # Tahminleri al ve sonuçları çiz
-        y_pred = model.predict(data)
-        y_pred_classes = np.argmax(y_pred, axis=1)
-        plot_confusion_matrix(labels, y_pred_classes, classes=['Dense', 'Medium Dense', 'Sparse', 'None'])
-        plot_accuracy_and_loss(history)
-        plot_pr_curve(labels, y_pred, class_names=['Dense', 'Medium Dense', 'Sparse', 'None'])
-        plot_roc_curve(labels, y_pred, class_names=['Dense', 'Medium Dense', 'Sparse', 'None'])
+            # Tahminler ve grafiksel analiz
+            y_pred = model.predict(data)
+            y_pred_classes = np.argmax(y_pred, axis=1)
+            plot_metrics(labels, y_pred, y_pred_classes, history)
 
     print('Tüm eğitim ve değerlendirme süreçleri tamamlandı.')
